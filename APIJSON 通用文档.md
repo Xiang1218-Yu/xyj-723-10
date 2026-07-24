@@ -1,747 +1,528 @@
 # APIJSON 通用文档
 
-> 版本：v8.2.0 | 基于 ORM 内核源码深度整理
+> 基于 APIJSON ORM v8.2.0 源码核对编写
+>
+> **标注约定**：
+> - `[源码]` — 内容可在源码中直接定位验证
+> - `[推断]` — 基于源码逻辑的合理推导
+> - `[示例]` — 使用示例（非源码直接内容）
 
 ---
 
-## 目录
+## 一、快速上手 `[示例]`
 
-1. [快速开始](#一快速开始)
-2. [请求协议](#二请求协议)
-3. [条件操作符](#三条件操作符)
-4. [@combine 条件表达式引擎](#四combine-条件表达式引擎)
-5. [关键词 (Keywords)](#五关键词-keywords)
-6. [连表查询 (JOIN)](#六连表查询-join)
-7. [子查询 (Subquery)](#七子查询-subquery)
-8. [远程函数与脚本](#八远程函数与脚本)
-9. [权限与安全](#九权限与安全)
-10. [多数据库支持](#十多数据库支持)
+### 1.1 请求格式
 
----
-
-## 一、快速开始
-
-### 1.1 什么是 APIJSON
-
-APIJSON 是一个 **零代码 RESTful API 引擎**。你只需定义数据库表结构，前端通过 JSON 描述查询需求，后端自动生成 SQL 并返回 JSON 结果，无需编写任何 Controller/Service/DAO 代码。
-
-### 1.2 Hello World
-
-**请求：** 查询 id=1 的 User
+APIJSON 通过 JSON 描述查询需求，后端自动生成 SQL 并返回 JSON 结果：
 
 ```json
+// GET /get
 {
-  "User": {
-    "id": 1
+  "Moment": {
+    "id{}": [1, 2, 3],
+    "@column": "id,userId,content",
+    "@order": "date-"
   }
 }
 ```
 
-**自动生成 SQL：**
+生成 SQL `[推断]`：
 ```sql
-SELECT * FROM `User` WHERE `id` = 1 LIMIT 10
-```
-
-**响应：**
-```json
-{
-  "User": {
-    "id": 1,
-    "name": "Tommy",
-    "sex": 0,
-    "picture": "https://..."
-  },
-  "ok": true
-}
+SELECT id, userId, content FROM Moment WHERE id IN (1, 2, 3) ORDER BY date DESC
 ```
 
 ---
 
-## 二、请求协议
+## 二、请求协议 `[源码]`
 
-### 2.1 HTTP 方法
+### 2.1 请求方法
 
-| 方法 | 对应 SQL | 语义 |
-|------|----------|------|
-| GET | SELECT | 查询单条/多条记录 |
-| HEAD | SELECT COUNT | 仅返回总数，不返回数据 |
-| POST | INSERT | 新增记录 |
-| PUT | UPDATE | 更新记录 |
-| DELETE | DELETE (或假删除) | 删除记录 |
-| CRUD | 动态指定 | JSON 中通过 `"@method":"POST"` 等指定 |
+来源 [RequestMethod.java#L14-L59](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Charmander/APIJSONORM/src/main/java/apijson/RequestMethod.java#L14)：
+
+| 方法 | HTTP 语义 | 说明 |
+|------|-----------|------|
+| GET | 查询 | 常规获取数据 |
+| HEAD | 检查 | 非空检查，返回总数 |
+| GETS | 安全GET | 通过POST安全获取，不显示请求/返回内容 |
+| HEADS | 安全HEAD | 通过POST安全检查 |
+| POST | 新增 | 插入数据 |
+| PUT | 修改 | 部分更新字段 |
+| DELETE | 删除 | 删除数据 |
+| CRUD | 批量 | 包含多条增删改查+函数调用 |
 
 ### 2.2 请求结构
 
-```json
-{
-  "@role": "ADMIN",
-  "@database": "MYSQL",
-  "@schema": "mydb",
-
-  "Moment": {
-    "@column": "id,userId,content",
-    "@order": "date-",
-    "@count": 10,
-    "@page": 0,
-
-    "userId": 1,
-    "date>": "2024-01-01",
-    "content$": "%hello%"
-  }
-}
 ```
-
-### 2.3 响应结构
-
-```json
 {
-  "ok": true,
-  "code": 200,
-  "msg": "success",
-  "Moment": [{ ... }],
-  "total": 100,
-  "count": 10,
-  "time": 1700000000000
+  "表名": {
+    "字段条件key": "值",
+    "@关键字": "关键字值"
+  },
+  "[]": {             // 数组/分页
+    "page": 0,
+    "count": 10
+  }
 }
 ```
 
 ---
 
-## 三、条件操作符
+## 三、条件操作符 `[源码]`
 
-### 3.1 比较运算
+### 3.1 完整操作符对照表
 
-| 后缀 | SQL 等价 | 示例 | 说明 |
-|------|----------|------|------|
-| (无) | `=` | `"id": 1` | 等于 |
-| `!` | `!=` | `"sex!": 0` | 不等于 |
-| `>` | `>` | `"age>": 18` | 大于 |
-| `<` | `<` | `"age<": 65` | 小于 |
-| `>=` | `>=` | `"age>=": 18` | 大于等于 |
-| `<=` | `<=` | `"age<=": 65` | 小于等于 |
+来源 [gainWhereItem()](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Charmander/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L3897)：
 
-### 3.2 模糊匹配
+| 后缀 | keyType | SQL | 值类型 | 示例 |
+|------|---------|-----|--------|------|
+| (无) | 0 | `=` | Boolean/Number/String | `"id": 1` → `id = 1` |
+| `!` | 0 | `!=` / `IS NOT NULL` | 任意 | `"sex!": 0` → `sex != 0`; `"name!": null` → `name IS NOT NULL` |
+| `$` | 1 | `LIKE` | String | `"name$": "a"` → `name LIKE '%a%'` `[推断]` |
+| `~` | 2 | `REGEXP` / `~`(PG) | String/String[] | `"name~": "^[a-z]+"` → 正则匹配 |
+| `*~` | -2 | 忽略大小写正则 | String/String[] | `"name*~": "abc"` → PG:`name ~* ?`; MySQL8:`regexp_like(name, ?, 'i')` |
+| `%` | 3 | `BETWEEN ... AND ...` | String(逗号分隔) | `"date%": "2024-01-01,2024-12-31"` |
+| `{}` | 4 | `IN (...)` | Array/Collection | `"id{}": [1,2,3]` → `id IN (1,2,3)` |
+| `}{` | 5 | `EXISTS (子查询)` | Subquery | `"userId}{": "/User/id"` `[推断]` |
+| `<>` | 6 | JSON数组包含 | Array | `"tagIdList<>": [1,2]` |
+| `>=` | 7 | `>=` | Number/String | `"id>=": 100` |
+| `<=` | 8 | `<=` | Number/String | `"id<=": 200` |
+| `>` | 9 | `>` | Number/String/Date | `"id>": 50` |
+| `<` | 10 | `<` | Number/String/Date | `"id<": 100` |
 
-| 后缀 | SQL 等价 | 示例 | 说明 |
-|------|----------|------|------|
-| `$` | `LIKE` | `"name$": "a"` | LIKE '%a%' |
-| `%$` | `LIKE 'x%'` | `"name%$": "a"` | 前缀匹配 LIKE 'a%' |
-| `_$` | `LIKE '_x'` | `"name_$": "a"` | 单字符后缀匹配 |
-| `~` | `REGEXP` | `"name~": "^[A-Z]"` | 正则匹配 |
-| `*~` | `REGEXP (ignore case)` | `"name*~": "^[a-z]"` | 忽略大小写正则 |
+> **注意**`[源码]`：`~` 正则在不同数据库的实现不同（[gainRegExpString() L4304](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Charmander/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L4304)）：
+> - PostgreSQL: `key ~ ?`（`*~`→`key ~* ?`）
+> - MySQL 8+/Oracle/Dameng/KingBase: `regexp_like(key, ?, 'c')`（`*~`→`'i'`）
+> - ClickHouse: `match(key, ?)`（`*~`→`match(lower(key), lower(?))`）
+> - Elasticsearch: `key RLIKE ?`
+> - Hive: `key REGEXP ?`
+> - Presto/Trino: `regexp_like(key, ?)`
 
-`$` 后缀的占位符规则：
-- `key$:"a"` → `LIKE '%a%'`（包含）
-- `key%$:"a"` → `LIKE 'a%'`（以...开头）
-- `key_$:"a"` → `LIKE '_a'`（倒数第二字符匹配）
-- `key%_$:"a"` → `LIKE 'a%_'`（复合占位）
+### 3.2 长度函数前缀 `[源码]`
 
-### 3.3 范围与集合
+来源 [gainKey() L4014](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Charmander/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L4014)：
 
-| 后缀 | SQL 等价 | 示例 | 说明 |
-|------|----------|------|------|
-| `{}` + 数组 | `IN (...)` | `"id{}": [1,2,3]` | 在集合中 |
-| `{}` + 字符串 | 条件链 | `"id{}": ">0;<=100"` | 多条件 AND 连接 |
-| `\|{}` + 数组 | `IN (...)` (OR) | `"id\|{}": [1,2,3]` | OR 语义的 IN |
-| `!{}` + 数组 | `NOT IN (...)` | `"id!{}": [4,5]` | 不在集合中 |
-| `%` | `BETWEEN` | `"age%": "18,65"` | 在闭区间内 |
-| `}{` | `EXISTS` | `"id}{": {"Comment":{...}}` | EXISTS 子查询 |
+| 前缀 | SQL函数 | 语义 | 示例 |
+|------|---------|------|------|
+| `key[` | `length(key)` / `datalength(key)` (SQL Server) | 字符串长度 | `"name[>": 5` → `length(name) > 5` |
+| `key{` | `json_length(key)` | JSON数组长度 | `"tagList{>=": 1` → `json_length(tagList) >= 1` |
 
-`key{}` 的字符串格式支持：
-- 分号分隔多条件：`"id{}": ">0;<=1000;!=500"`
-- `=null` → `IS NULL`
-- `!=null` → `IS NOT NULL`
-- 函数条件：`"length(name)<=10"`
-- 算术表达式：`"+3*2<=10"`
+### 3.3 NULL 判断 `[源码]`
 
-### 3.4 JSON 操作
+来源 [gainEqualString() L3995](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Charmander/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L3995)：
 
-| 后缀 | SQL 等价 | 示例 | 说明 |
-|------|----------|------|------|
-| `<>` + 数组/值 | JSON包含 | `"tagList<>": "tech"` | JSON数组包含元素 |
-| `key[` | `length(key)` | `"name[": ">0"` | 字符串长度比较 |
-| `key{` | `json_length(key)` | `"images{": ">0"` | JSON数组长度比较 |
+| 写法 | SQL |
+|------|-----|
+| `"name": null` | `name IS NULL` |
+| `"name!": null` | `name IS NOT NULL` |
+| `"@null": "tag,pictureList"` | 将指定 key 设为 null（SET 或 IS NULL 条件） |
 
-### 3.5 逻辑后缀
+### 3.4 多值逻辑连接（同 key 多值）`[源码]`
 
-所有操作符 key 末尾可附加逻辑符：
+来源 [Logic.java](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Charmander/APIJSONORM/src/main/java/apijson/orm/Logic.java)：操作符后缀后可追加 `&`/`|` 控制多值间 AND/OR 连接：
 
-| 后缀 | 语义 | 示例 |
+```json
+{ "name&$": ["a", "b"] }
+```
+
+`[推断]` 这会生成类似 `name LIKE '%a%' AND name LIKE '%b%'` 的条件。
+
+---
+
+## 四、`@combine` 条件组合 `[源码]`
+
+### 4.1 两种模式
+
+`@combine` 支持两种格式，由是否含逗号自动判断（[L5803-L5804](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Charmander/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L5803)）：
+
+#### 模式一：简单列表模式
+
+```json
+"@combine": "key0,&key1,|key2,!key3"
+```
+
+前缀语义：
+- `&key` → AND 组
+- `|key` → OR 组（无前缀默认 OR 组）
+- `!key` → NOT 组
+
+**限制**`[源码]`：PUT 请求禁止使用 `|key` 和 `!key`（[L5901-L5912](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Charmander/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L5901)）。
+
+组合顺序固定：AND组 → OR组 → NOT组，组间 AND 连接。
+
+#### 模式二：布尔表达式模式（5.0+ 推荐）
+
+```json
+"@combine": "date> | (contactIdList<> & !(name~ | tag$))"
+```
+
+### 4.2 表达式语法严格规则 `[源码]`
+
+来源 [parseCombineExpression()](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Charmander/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L3364)：
+
+| 规则 | 正确 | 错误 |
 |------|------|------|
-| `&` | 同 key 多值 AND | `"name&$": ["a","b"]` |
-| `\|` | 同 key 多值 OR | `"name\|$": ["a","b"]` |
-| `!` | NOT 取反 | `"name!$": "a"` |
+| AND/OR 两侧各一个空格 | `a & b` | `a&b`, `a &b`, `a& b` |
+| NOT 紧跟 key/(，无空格 | `!a`, `!(a \| b)` | `! a`, `! (a \| b)` |
+| 括号内侧无空格 | `(a & b)` | `( a & b )` |
+| 首尾无空格 | `a \| b` | ` a \| b`, `a \| b ` |
+| 无连续空格 | `a & b` | `a  &  b` |
+| NOT 右侧禁止空格或 ) 或 & 或 \| | `!a`, `!(a \| b)` | `! )`, `! &` |
+| 左括号前必须有 &\| | `a & (b \| c)` | `a (b \| c)` |
+
+### 4.3 安全限制 `[源码]`
+
+来源 [AbstractSQLConfig.java#L61-L67](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Charmander/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L61)：
+
+| 限制 | 默认值 | 可配置 |
+|------|--------|--------|
+| WHERE 条件总数 | ≤ 10（MAX_WHERE_COUNT） | public static |
+| HAVING 条件总数 | ≤ 5（MAX_HAVING_COUNT） | public static |
+| 括号嵌套深度 | ≤ 2（MAX_COMBINE_DEPTH） | public static |
+| 表达式内 key 数量 | ≤ 5（MAX_COMBINE_COUNT） | public static |
+| 同 key 引用次数 | ≤ 2（MAX_COMBINE_KEY_COUNT） | public static |
+| 表达式key/总条件比 | ≤ 1.0（MAX_COMBINE_RATIO） | public static |
+
+### 4.4 未引用条件的处理 `[源码]`
+
+布尔表达式中**未被引用的 WHERE 条件**会自动 AND 追加到表达式外层（[L3613-L3644](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Charmander/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L3613)）。
+
+PreparedStatement 参数顺序`[源码]`（[L3629-L3650](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Charmander/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L3629)）：
+1. AND 条件值（未被表达式引用的条件）
+2. 表达式内条件值
+
+### 4.5 @combine 错误排查 `[推断]`
+
+| 错误信息关键词 | 原因 |
+|---------------|------|
+| "不允许首尾有空格" | 表达式开头或结尾有空格 |
+| "左右必须各一个相邻空格" | &\| 前后空格数不对 |
+| "左括号...右边不允许有相邻空格" | `( ` 括号后有空格 |
+| "右括号...左边不允许有相邻空格" | ` )` 括号前有空格 |
+| "左边缺少 & \| 逻辑连接符" | 两个条件间缺少连接符 |
+| "括号嵌套层级...超过最大值" | 超过 MAX_COMBINE_DEPTH=2 |
+| "重复引用...超过最大值" | 同 key 出现超过 2 次 |
+| "key 数量...超过最大值" | 表达式中超过 5 个 key |
+| "对应的条件键值对...不存在" | 表达式中的 key 在 WHERE 条件中找不到 |
 
 ---
 
-## 四、@combine 条件表达式引擎
+## 五、系统关键词参考 `[源码]`
 
-### 4.1 概述
+来源 [JSONMap.java#L166-L242](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Charmander/APIJSONORM/src/main/java/apijson/JSONMap.java#L166) 中定义的 KEY_ 常量及 TABLE_KEY_LIST：
 
-`@combine` 是 APIJSON 的条件组合引擎，允许用布尔表达式精确控制 WHERE 子句中各条件间的逻辑关系。
+### 5.1 数据源/配置类
 
-两种模式：
-1. **简单列表模式**（兼容旧版）：逗号分隔，前缀标记逻辑
-2. **布尔表达式模式**（5.0+推荐）：完整的 &\|!()+括号表达式
+| 关键词 | 语义 | 值类型 |
+|--------|------|--------|
+| `@database` | 数据库类型 | String（35种白名单之一） |
+| `@datasource` | 数据源标识 | String |
+| `@namespace` | 命名空间 | String |
+| `@catalog` | 目录 | String |
+| `@schema` | 数据库模式 | String |
+| `@role` | 当前角色 | String（UNKNOWN/LOGIN/CONTACT/CIRCLE/OWNER/ADMIN） |
+| `@explain` | 是否分析SQL | Boolean（仅 DEBUG 模式可用） |
+| `@cache` | 缓存策略 | String（RAM/ROM/ALL） |
 
-### 4.2 简单列表模式
+### 5.2 查询控制类
+
+| 关键词 | 语义 | 值类型 |
+|--------|------|--------|
+| `@column` | 查询字段/函数 | String: `"col0,col1;fun0(col0);fun1(col1):alias"` |
+| `@from` | FROM子查询 | Subquery对象 |
+| `@combine` | 条件组合 | String（见第四节） |
+| `@group` | 分组字段 | String |
+| `@having` | 聚合条件 | String或Map（见第七节） |
+| `@having&` | 聚合条件(AND模式) | String |
+| `@order` | 排序方式 | String |
+| `@sample` | 取样方式 | String |
+| `@latest` | 最近方式 | String |
+| `@partition` | 分区方式 | String |
+| `@fill` | 填充方式 | String |
+| `@key` | 字段表达式映射 | String或Map |
+| `@raw` | 原始SQL片段标记 | String（逗号分隔key列表） |
+
+### 5.3 值处理类
+
+| 关键词 | 语义 | 值类型 |
+|--------|------|--------|
+| `@null` | 设为null的字段 | String（逗号分隔） |
+| `@cast` | 类型转换 | String: `"key0:type0,key1:type1"` |
+| `@json` | 转JSON输出 | String（逗号分隔字段名） |
+| `@string` | 转String输入 | String（逗号分隔字段名） |
+| `@trim` | 去除首尾空白 | String（逗号分隔字段名） |
+
+### 5.4 方法控制类
+
+| 关键词 | 语义 | 值类型 |
+|--------|------|--------|
+| `@method` | 对象内操作方法 | String |
+| `@get`/`@gets`/`@head`/`@heads`/`@post`/`@put`/`@delete` | 子对象方法 | 对应配置对象 |
+
+### 5.5 Parser 级关键词（不在 TABLE_KEY_LIST 中）`[源码]`
+
+以下关键词在 [JSONMap.java](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Charmander/APIJSONORM/src/main/java/apijson/JSONMap.java#L166) 中定义但未列入 TABLE_KEY_LIST（由 Parser 层处理而非 newSQLConfig）：
+
+| 关键词 | 语义 |
+|--------|------|
+| `@try` | 尝试执行，忽略异常 |
+| `@catch` | 捕获异常处理方式 |
+| `@drop` | 丢弃不返回 |
+| `@default` | 自定义默认值 |
+
+---
+
+## 六、JOIN 连表查询 `[源码]`
+
+### 6.1 JOIN 类型
+
+来源 [Join.java#L21](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Charmander/APIJSONORM/src/main/java/apijson/orm/Join.java#L21) 和 [concatJoinWhereString()](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Charmander/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L3753)：
+
+| 符号 | 写法 | 类型 | SQL 语义 |
+|------|------|------|----------|
+| `@` | `"@/User"` | APP JOIN | 应用层拼接（两次查询） |
+| `<` | `"</User"` | LEFT JOIN | A LEFT JOIN B |
+| `>` | `">/User"` | RIGHT JOIN | A RIGHT JOIN B |
+| `*` | `"*/User"` | CROSS JOIN | A CROSS JOIN B |
+| `&` | `"&/User"` | INNER JOIN | A INNER JOIN B |
+| `\|`/`""` | `"/User"` 或 `"\|/User"` | FULL JOIN | A FULL JOIN B |
+| `!` | `"!/User"` | OUTER JOIN | NOT (A \| B) |
+| `^` | `"^/User"` | SIDE JOIN | NOT (A & B) |
+| `(` | `"(/User"` | ANTI JOIN | A AND NOT B |
+| `)` | `")/User"` | FOREIGN JOIN | NOT A AND B |
+| `~` | `"~/User"` | ASOF JOIN | 时序最近匹配 |
+
+### 6.2 ON 关联条件 `[示例]`
 
 ```json
 {
-  "Moment": {
-    "id{}": [1,2,3],
-    "sex": 0,
-    "name$": "a",
-    "@combine": "id{},&sex,!name$"
+  "Moment": {},
+  "join": {
+    "</User/id@": {
+      "@column": "id,name"
+    }
   }
 }
 ```
 
-规则：
-- `&key` → key 在 AND 组
-- `|key` → key 在 OR 组
-- `!key` → key 在 NOT 组
-- 无前缀 → 归入 OR 组
-- PUT 请求不允许 `|key` 或 `!key`
+`[推断]` 生成：`Moment LEFT JOIN User ON User.id = Moment.userId`（通过 `id@` 引用路径 `/User/id`，Parser 自动将 `userId` 映射到 `User.id`）
 
-生成的 SQL：
-```sql
-WHERE (id IN (1,2,3)) AND (sex = 0) AND NOT (name LIKE '%a%')
-```
+---
 
-### 4.3 布尔表达式模式
+## 七、子查询 `[源码]`
 
-```json
-{
-  "Moment": {
-    "date>": "2024-01-01",
-    "contactIdList<>": [1,2],
-    "name*~": "a",
-    "tag&$": "%a%",
-    "@combine": "date> | (contactIdList<> & (name*~ | tag&$))"
-  }
-}
-```
+来源 [Subquery.java](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Charmander/APIJSONORM/src/main/java/apijson/orm/Subquery.java)：
 
-生成的 SQL：
-```sql
-WHERE (date > '2024-01-01')
-   OR (contactIdList LIKE '%1%' AND (name REGEXP 'a' OR tag LIKE '%a%'))
-```
-
-### 4.4 语法规则
-
-| 规则 | 说明 |
+| 字段 | 语义 |
 |------|------|
-| `&` 两侧必须各一个空格 | `a & b` ✅ / `a&b` ❌ / `a &b` ❌ |
-| `\|` 两侧必须各一个空格 | `a \| b` ✅ |
-| `!` 紧跟 key 或 `(` 无空格 | `!a` ✅ / `!(a \| b)` ✅ / `! a` ❌ |
-| `(` 右侧不允许空格 | `(a` ✅ / `( a` ❌ |
-| `)` 左侧不允许空格 | `a)` ✅ / `a )` ❌ |
-| 不允许首尾空格 | 整个表达式不能以空格开头/结尾 |
+| path | 引用路径 |
+| from | 是否 FROM 子查询 |
+| range | 范围（ALL/ANY） |
+| key | 返回字段 |
+| config | 子查询 SQLConfig |
 
-### 4.5 安全限制
-
-| 参数 | 默认值 | 说明 |
-|------|--------|------|
-| `MAX_COMBINE_DEPTH` | 2 | 最大括号嵌套层级 |
-| `MAX_COMBINE_COUNT` | 5 | 表达式中最多引用的 key 数量 |
-| `MAX_COMBINE_KEY_COUNT` | 2 | 单个 key 最多被引用次数 |
-| `MAX_COMBINE_RATIO` | 1.0 | 引用key数 / 总条件数 上限 |
-| `ALLOW_MISSING_KEY_4_COMBINE` | true | 允许表达式中引用不存在的key |
-
-这些限制通过 `AbstractSQLConfig` 的 public static 变量配置，也可通过子类重写对应的 `getMaxXxx()` 方法在实例级别调整。
-
-### 4.6 额外规则
-
-- `id`, `id{}`, `userId`, `userId{}` **不允许**出现在 @combine 表达式中（它们始终强制 AND）
-- 表达式中未引用的条件 key，会以 AND 方式连接到表达式结果之后
-- PreparedStatement 模式下，值的顺序为：先 AND 条件值，后表达式内条件值
-- @having 同样支持 @combine：`"@having": { "avg(id)>": "100", "count(0)>": "5", "@combine": "avg(id)> & count(0)>" }`
-
-### 4.7 错误场景与排查
-
-| 错误信息 | 原因 | 修复 |
-|----------|------|------|
-| 不允许首尾有空格 | 表达式有多余空格 | 去掉首尾空格，规范 &\| 两侧空格 |
-| 空格左边缺少条件key | &\| 前缺少条件 | 检查表达式完整性 |
-| 左括号比右括号多/少 | 括号不匹配 | 检查括号配对 |
-| key数量已超过最大值 | 超过 MAX_COMBINE_COUNT | 减少条件或增大限制 |
-| 重复引用次数超过最大值 | 同key引用超2次 | 去重或增大 MAX_COMBINE_KEY_COUNT |
-| 条件键值对不存在 | 表达式引用了where中没有的key | 添加对应key:value 或设置 ALLOW_MISSING_KEY_4_COMBINE |
+`[示例]` 子查询作为条件值：
+```json
+{ "userId}{": { "from": "User", "where": { "sex": 1 } } }
+```
+`[推断]` → `EXISTS (SELECT * FROM User WHERE sex = 1)`
 
 ---
 
-## 五、关键词 (Keywords)
+## 八、远程函数 `[源码]`
 
-所有 `@` 开头的 key 为系统关键词，在 [JSONMap.java](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Charmander/APIJSONORM/src/main/java/apijson/JSONMap.java#L166) 中定义：
+来源 [AbstractFunctionParser.java](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Charmander/APIJSONORM/src/main/java/apijson/orm/AbstractFunctionParser.java) 和 [Operation.java#L118-L138](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Charmander/APIJSONORM/src/main/java/apijson/orm/Operation.java#L118)：
 
-### 5.1 数据源与配置
-
-| 关键词 | 类型 | 说明 |
-|--------|------|------|
-| `@database` | String | 数据库类型：MYSQL/POSTGRESQL/ORACLE/... |
-| `@datasource` | String | 数据源名称（多数据源场景） |
-| `@namespace` | String | 命名空间 |
-| `@catalog` | String | Catalog |
-| `@schema` | String | Schema |
-| `@role` | String | 角色：UNKNOWN/LOGIN/CONTACT/CIRCLE/OWNER/ADMIN |
-| `@explain` | Boolean | true 时返回 SQL 执行计划（仅 DEBUG 模式） |
-| `@cache` | String/Int | 缓存策略：RAM/ROM/ALL |
-
-### 5.2 查询控制
-
-| 关键词 | 类型 | 说明 |
-|--------|------|------|
-| `@column` | String | 返回字段/函数：`"id,name;count(id):total"` |
-| `@from` | Subquery | 子查询作为表来源 |
-| `@combine` | String | 条件组合表达式（见第四章） |
-| `@group` | String | GROUP BY：`"type,sex"` |
-| `@having` | String/Map | HAVING 条件 |
-| `@having&` | String | HAVING 强制 AND 连接 |
-| `@order` | String | 排序：`"date-,id+"` (+升序/-降序) |
-| `@count` | Int | 每页条数（默认10，最大100） |
-| `@page` | Int | 页码（从0开始，可配置从1开始） |
-| `@query` | Int | 查询类型：0-总数和数据，1-总数，2-数据 |
-| `@sample` | String | 取样（ClickHouse等） |
-| `@latest` | String | 最近N条 |
-| `@partition` | String | 分区（Hive等） |
-| `@fill` | String | 填充（时序数据库） |
-| `@distinct` | Boolean | DISTINCT 去重 |
-
-### 5.3 数据操作
-
-| 关键词 | 类型 | 说明 |
-|--------|------|------|
-| `@null` | String | 设为NULL的字段：`"tag,pictureList"` |
-| `@cast` | String | 类型转换：`"date:DATE,price:DECIMAL"` |
-| `@key` | String/Map | 字段映射/表达式：`"year:left(date,4)"` |
-| `@raw` | String | 原始SQL片段白名单 |
-| `@json` | String | 将字段转为 JSON 输出 |
-| `@method` | String | JSON对象内部指定HTTP方法 |
-| `@get`/`@gets` | - | 子对象强制GET方法 |
-| `@post`/`@put`/`@delete` | - | 子对象指定方法 |
-
-### 5.4 @column 格式
-
-```
-"@column": "key0,key1,key2;fun0(key0,key1):alias0;fun1(key2):alias1"
-```
-
-- `,` 分隔同组字段
-- `;` 分隔不同组（字段组 / 函数组）
-- `:` 后跟别名
-- 支持函数：`count`, `sum`, `max`, `min`, `avg`, `length`, `left`, `substring`, `concat`, ...
-- `DISTINCT` 前缀去重：`"@column": "DISTINCT name"`
-
-### 5.5 @order 格式
-
-```
-"@order": "key0+,key1-,key2"
-```
-
-- `+` 升序 ASC（默认）
-- `-` 降序 DESC
-- 逗号分隔多字段排序优先级
+- 函数调用格式：`key()` 后缀，例如 `"name()": "getUserName(id)"`
+- IF 条件脚本：`"条件表达式": "throw new Error('...')"`
+- 需启用 `AbstractFunctionParser.ENABLE_SCRIPT_FUNCTION = true`
+- JDK 8-13 自带 Nashorn JS 引擎，其它版本需外部引擎依赖
 
 ---
 
-## 六、连表查询 (JOIN)
+## 九、权限与角色 `[源码]`
 
-### 6.1 JOIN 类型总表
+### 9.1 六种角色
 
-| 符号 | 类型 | 语义 | SQL |
-|------|------|------|-----|
-| `@/` | APP JOIN | 应用层关联（非SQL JOIN） | 两次查询程序拼接 |
-| `</` | LEFT JOIN | 左外连接 | A LEFT JOIN B |
-| `>/` | RIGHT JOIN | 右外连接 | A RIGHT JOIN B |
-| `*/` | CROSS JOIN | 交叉连接 | A CROSS JOIN B |
-| `&/` | INNER JOIN | 内连接 | A INNER JOIN B |
-| `\|/` | FULL JOIN | 全外连接 | A FULL JOIN B |
-| `!/` | OUTER JOIN | 外连接（两边独有） | NOT(A \| B) |
-| `^/` | SIDE JOIN | 边缘连接 | NOT(A & B) |
-| `(/` | ANTI JOIN | 反连接（A有B没有） | A & NOT B |
-| `)/` | FOREIGN JOIN | 外键反连接（B有A没有） | B & NOT A |
-| `~/` | ASOF JOIN | 时序最近连接 | B ~= A |
-
-### 6.2 基本用法
-
-```json
-{
-  "Moment": {
-    "id": 1,
-    "User@": {
-      "id@": "/Moment/userId"
-    }
-  }
-}
-```
-
-或使用 JOIN 语法：
-
-```json
-{
-  "Moment": {
-    "@column": "id,content",
-    "join": {
-      "</User": {
-        "@column": "id,name",
-        "name~": "a",
-        "@combine": "name~",
-        "@order": "id-"
-      }
-    },
-    "userId{}": ">0"
-  }
-}
-```
-
-生成 SQL：
-```sql
-SELECT Moment.id, Moment.content, User.id AS User_id, User.name AS User_name
-FROM Moment
-LEFT JOIN User ON User.id = Moment.userId AND User.name REGEXP 'a'
-WHERE Moment.userId > 0
-ORDER BY User.id DESC
-LIMIT 10
-```
-
-### 6.3 ON 关联条件
-
-在 join 的 key 中使用 `/Table/refKey@` 格式指定关联：
-
-```json
-{
-  "Comment": {
-    "join": {
-      "</User": {
-        "id@": "/Comment/userId"
-      }
-    }
-  }
-}
-```
-
-ON 条件支持的后缀：
-
-| 后缀 | 关联类型 |
-|------|----------|
-| `@` (无后缀) | 一对一 `=` |
-| `{}@` | 一对多 `IN` |
-| `<>@` | 多对一 |
-| `$@` | LIKE 关联 |
-| `~@` | REGEXP 关联 |
-| `>=@`, `<=@`, `>@`, `<@` | 比较关联 |
-
-### 6.4 APP JOIN vs SQL JOIN
-
-**APP JOIN (`@/`)**：
-- 先查主表，再用主表结果的字段值查询副表
-- 不依赖数据库 JOIN 能力
-- 支持所有数据库
-- 副表条件无法在 ON 中过滤
-- 适合一对多、多对一场景
-
-**SQL JOIN (`</`, `&/` 等)**：
-- 单条 SQL 完成，性能更好
-- 副表条件可在 ON 中过滤
-- 数据库需支持对应 JOIN 语法
-- 复杂嵌套可能产生性能问题
-
----
-
-## 七、子查询 (Subquery)
-
-### 7.1 基本子查询
-
-```json
-{
-  "Moment": {
-    "userId}{": {
-      "User": {
-        "@column": "id",
-        "sex": 1
-      }
-    }
-  }
-}
-```
-
-生成 SQL：
-```sql
-SELECT * FROM Moment WHERE userId EXISTS (SELECT id FROM User WHERE sex = 1)
-```
-
-### 7.2 IN 子查询
-
-```json
-{
-  "Moment": {
-    "userId{}": {
-      "from": "User",
-      "User": {
-        "@column": "id",
-        "sex": 1
-      }
-    }
-  }
-}
-```
-
-生成：
-```sql
-WHERE userId IN (SELECT id FROM User WHERE sex = 1)
-```
-
-### 7.3 FROM 子查询
-
-```json
-{
-  "Moment": {
-    "@from": {
-      "from": "Moment",
-      "Moment": {
-        "@column": "id,userId",
-        "date>": "2024-01-01"
-      }
-    },
-    "id{}": ">0"
-  }
-}
-```
-
----
-
-## 八、远程函数与脚本
-
-### 8.1 远程函数
-
-通过 `AbstractFunctionParser` 支持在请求中调用服务端函数：
-
-```json
-{
-  "Moment": {
-    "id": "verify(http://example.com/verify)"
-  }
-}
-```
-
-### 8.2 IF 条件脚本
-
-通过 `@if` 或 `Operation.IF` 支持条件脚本：
-
-```json
-{
-  "@role": "ADMIN",
-  "User": {
-    "id": 1,
-    "name": "newName",
-    "@if": {
-      "sex != 0 && sex != 1": "throw new Error('sex must be 0 or 1')",
-      "ELSE": ""
-    }
-  }
-}
-```
-
-支持的脚本引擎：
-- JavaScript (Nashorn, JDK 8-13)
-- JSR223 兼容引擎（Groovy, Python, Lua 等）
-
-**安全警告：**
-- 必须启用 `AbstractFunctionParser.ENABLE_SCRIPT_FUNCTION = true`
-- 必须配置 `ClassFilter` 防止脚本注入
-- JDK 14+ 需外部脚本引擎依赖
-- 强烈建议在沙箱环境中运行
-
----
-
-## 九、权限与安全
-
-### 9.1 角色体系 (RequestRole)
+来源 [AbstractVerifier.java#L76-L96](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Charmander/APIJSONORM/src/main/java/apijson/orm/AbstractVerifier.java#L76)：
 
 | 角色 | 常量 | 说明 |
 |------|------|------|
-| UNKNOWN | 0 | 未登录 |
-| LOGIN | 1 | 已登录 |
-| CONTACT | 2 | 联系人 |
-| CIRCLE | 3 | 圈子成员 |
-| OWNER | 4 | 所有者（自己的数据） |
-| ADMIN | 5 | 管理员 |
+| UNKNOWN | 未登录 | 不明身份用户 |
+| LOGIN | 已登录 | 已登录用户（自动注入 userId>0 条件） |
+| CONTACT | 联系人 | userId{} 在 contactIdList 中 |
+| CIRCLE | 圈子成员 | CONTACT + OWNER，通过 verifyCircle() 校验 |
+| OWNER | 拥有者 | userId = 当前记录.userId |
+| ADMIN | 管理员 | 通过 verifyAdmin() 校验，默认不支持需子类重写 |
 
-### 9.2 系统表
+### 9.2 Operation 访问控制
 
-| 表名 | 作用 |
-|------|------|
-| `Access` | API访问权限控制（角色、方法、频率限制） |
-| `Request` | 请求结构校验（MUST/REFUSE/TYPE/VERIFY规则） |
-| `Table` | 表别名映射、假删除配置 |
-| `Column` | 字段别名、类型、校验规则 |
-| `Function` | 远程函数注册 |
-| `Document` | API文档自动生成 |
+来源 [Operation.java](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Charmander/APIJSONORM/src/main/java/apijson/orm/Operation.java)：
 
-### 9.3 Operation 校验规则
-
-在 Request 表中配置：
-
-| Operation | 格式 | 说明 |
-|-----------|------|------|
-| MUST | `"key0,key1"` | 必须传的字段 |
-| REFUSE | `"key0,key1"` | 禁止传的字段 |
-| TYPE | `{ "key": "NUMBER" }` | 类型校验 |
-| VERIFY | `{ "key~": "PHONE" }` | 正则/条件校验 |
-| EXIST | `"key0,key1"` | 联合校验存在性 |
-| UNIQUE | `"key0,key1"` | 联合唯一性校验 |
-| INSERT | `{ "key": defaultValue }` | 不存在时插入默认值 |
-| UPDATE | `{ "key": value }` | 强制设置值 |
-| REPLACE | `{ "key": value }` | 替换值 |
-| REMOVE | `"key0,key1"` | 移除字段 |
-
-支持的类型：BOOLEAN, NUMBER, DECIMAL, STRING, URL, DATE, TIME, DATETIME, OBJECT, ARRAY，及它们的数组形式如 NUMBER[]
-
-支持的 VERIFY 正则：PHONE, EMAIL, PASSWORD, ID_CARD, BANK_CARD 等，在 `AbstractVerifier.COMPILE_MAP` 中定义。
-
-### 9.4 假删除（软删除）
-
-配置 Access 表中对应表的 `deletedKey`、`deletedValue`、`notDeletedValue`：
-
-```json
-{
-  "Moment": {
-    "deletedKey": "isDeleted",
-    "deletedValue": 1,
-    "notDeletedValue": 0
-  }
-}
-```
-
-此时 DELETE 请求会自动转为 UPDATE SET isDeleted=1，GET 查询自动追加 `isDeleted = 0` 条件。
-
-### 9.5 安全最佳实践
-
-1. **禁用 @raw**：非必要不启用 `@raw`，启用后严格控制白名单
-2. **脚本沙箱**：开启 IF/Function 脚本必须配置 ClassFilter
-3. **角色最小权限**：Access 表中按需分配，不使用 ADMIN 作为默认角色
-4. **参数校验**：所有写操作在 Request 表中配置 MUST/VERIFY/TYPE
-5. **PreparedStatement**：保持预编译开启（默认），防 SQL 注入
-6. **频率限制**：Access 表中配置 `max:1`/`time:60` 等频率参数
-7. **DEBUG模式**：生产环境关闭 `Log.DEBUG`，防止泄露表结构
+| 操作 | 格式 | 语义 |
+|------|------|------|
+| MUST | `"key0,key1"` | 必须传入的字段 |
+| REFUSE | `"key0,key1"` | 不允许传入的字段 |
+| TYPE | `{ "key": "NUMBER" }` | 字段类型校验 |
+| VERIFY | `{ "key~": "PHONE" }` | 正则/范围校验 |
+| EXIST | `"key0,key1"` | 联合唯一性校验 |
+| UNIQUE | `"key0,key1"` | 不存在校验（排除自身） |
+| INSERT | `{ ... }` | 不存在时插入 |
+| UPDATE | `{ ... }` | 存在则更新不存在则插入 |
+| REPLACE | `{ ... }` | 存在时替换 |
+| REMOVE | `"key0"` | 存在时移除 |
+| IF | `"condition": "code"` | 条件脚本 |
+| ALLOW_PARTIAL_UPDATE_FAIL | Boolean | 允许批量部分失败 |
+| IS_ID_CONDITION_MUST | Boolean | 强制要求 id/id{} 条件 |
 
 ---
 
-## 十、多数据库支持
+## 十、数据库支持 `[源码]`
 
-### 10.1 支持的数据库 (30+)
+### 10.1 已注册白名单（35种）
+
+来源 [DATABASE_LIST](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Charmander/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L146)：
 
 | 类别 | 数据库 |
 |------|--------|
-| 关系型 | MySQL, PostgreSQL, SQL Server, Oracle, DB2, MariaDB, TiDB, CockroachDB, SQLite, DuckDB, Dameng(达梦), KingBase(人大金仓), OpenGauss |
-| 分析型 | ClickHouse, Hive, Presto, Trino, Doris, StarRocks, Snowflake, Databricks, Databend |
-| NoSQL | Elasticsearch, Manticore, MongoDB, Cassandra, Redis, Kafka, MQ |
-| 时序 | InfluxDB, TDengine, TimescaleDB, QuestDB, IoTDB |
-| 图/向量 | SurrealDB, Milvus |
+| 关系型 | MYSQL, POSTGRESQL, SQLSERVER, ORACLE, DB2, MARIADB, TIDB, COCKROACHDB, DAMENG, KINGBASE, DUCKDB, OPENGAUSS, SQLITE(常量定义但未列入白名单) |
+| 分析型 | CLICKHOUSE, HIVE, PRESTO, TRINO, DORIS, STARROCKS, SNOWFLAKE, DATABEND, DATABRICKS |
+| 搜索 | ELASTICSEARCH, MANTICORE |
+| 时序 | INFLUXDB, TDENGINE, TIMESCALEDB, QUESTDB, IOTDB |
+| 向量 | MILVUS |
+| NoSQL | REDIS, MONGODB, CASSANDRA, SURREALDB |
+| 消息 | KAFKA, MQ |
 
-### 10.2 指定数据库
-
-在请求中通过 `@database` 指定：
-```json
-{
-  "@database": "CLICKHOUSE",
-  "Log": {
-    "@sample": "0.1",
-    "event": "login"
-  }
-}
-```
-
-或在全局配置中设置默认数据库。
-
-### 10.3 数据库方言差异处理
-
-| 功能 | MySQL | PostgreSQL | Oracle | ClickHouse |
-|------|-------|------------|--------|------------|
-| 引号 | `` ` `` | `"` | `""` | `` ` `` |
-| REGEXP | `REGEXP BINARY` | `~`/`~*` | `regexp_like()` | `match()` |
-| 字符串长度 | `length()` | `length()` | `length()` | `length()` |
-| JSON长度 | `json_length()` | `json_array_length()` | - | `length()` |
-| 分页 | `LIMIT offset,count` | `LIMIT count OFFSET offset` | `OFFSET offset ROWS FETCH NEXT count ROWS` | `LIMIT offset,count` |
-| 自增ID | AUTO_INCREMENT | SERIAL | SEQUENCE | - |
+`@database` 值必须为以上 35 种之一（SQLITE 虽有常量定义但不在白名单中，`[源码]`见 [L5490-L5492](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723/xyj-723-10_Charmander/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L5490) 校验逻辑）。
 
 ---
 
-## 附录：常用查询示例
+## 十一、@having 聚合条件 `[源码]`
 
-### A.1 分页查询
+来源 [L6058-L6148](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Charmander/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L6058)：
+
+### 11.1 String 格式
+
+```json
+"@having": "sum(balance)>100;count(id)<10"
+```
+
+- 用 `;` 分隔多个条件
+- 每个条件必须包含 SQL 函数（`count`, `sum`, `avg`, `max`, `min` 等）
+- 5.0+ 默认 OR 连接；使用 `@having&` 强制 AND
+
+### 11.2 Map 格式
+
+```json
+"@having": {
+  "sumBalance": "sum(balance)>100",
+  "countId": "count(id)<10",
+  "@combine": "sumBalance & countId"
+}
+```
+
+- key 为条件别名，value 为含函数的条件字符串
+- 内置 `@combine` 支持布尔表达式组合
+
+### 11.3 兼容配置 `[源码]`
+
+- `IS_HAVING_DEFAULT_AND = false`（[L35](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Charmander/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L35)）：设为 true 兼容 5.0 前 AND 默认
+- `IS_HAVING_ALLOW_NOT_FUNCTION = false`（[L40](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Charmander/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L40)）：设为 true 允许不含函数的表达式
+
+---
+
+## 十二、@column 字段选择 `[源码]`
+
+来源 [L6010-L6055](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Charmander/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L6010)：
+
+### 12.1 格式
+
+```
+@column = "field0,field1;function0(field0):alias0;function1(field0,field1);DISTINCT field2"
+```
+
+- `;` 分隔段
+- 不含 `(` 的段 → 按空格/逗号分割为字段列表
+- 含 `(` 的段 → 直接作为 SQL 函数表达式
+- 以 `DISTINCT ` 开头 → SELECT DISTINCT
+
+`[示例]`
+```json
+"@column": "id,userId;count(id):total;left(name,3):namePrefix"
+```
+`[推断]` → `SELECT id, userId, count(id) AS total, left(name,3) AS namePrefix`
+
+---
+
+## 十三、@key 字段映射 `[源码]`
+
+来源 [L6150-L6169](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Charmander/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L6150)：
+
+String 格式：
+```json
+"@key": "year:left(date,4);name_tag:(name,tag)"
+```
+
+Map 格式：
+```json
+"@key": { "year": "left(date,4)", "name_tag": "(name,tag)" }
+```
+
+请求中使用 `year>2024` 实际映射到 `left(date,4) > 2024`。
+
+---
+
+## 十四、假删除/软删除 `[源码]`
+
+来源 [L5835-L5881](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Charmander/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L5835) 和 [L5987-L6008](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Charmander/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L5987)：
+
+- 配置 `ACCESS_FAKE_DELETE_MAP` 为表指定 `deletedKey`/`deletedValue`/`notDeletedValue`
+- 非 DELETE 查询自动追加 `deletedKey != deletedValue` 或 `deletedKey = notDeletedValue`
+- DELETE 请求自动转为 PUT，设置 deletedKey=deletedValue
+- 子类重写 `isFakeDelete()` 返回 true 启用
+
+---
+
+## 附录 A：请求示例 `[示例]`
+
+### 复杂条件查询
+
 ```json
 {
   "Moment": {
-    "@column": "id,content,date",
-    "@order": "date-,id+",
-    "@count": 20,
-    "@page": 1,
-    "userId": 1
+    "date>": "2024-01-01",
+    "date<": "2024-12-31",
+    "userId{}": [10, 20, 30],
+    "content$": "APIJSON",
+    "praiseList{>=": 1,
+    "@column": "id,userId,content,date",
+    "@combine": "date> & date< & (userId{} | (content$ & praiseList{>=))",
+    "@order": "date-",
+    "@group": "userId"
+  },
+  "[]": {
+    "page": 0,
+    "count": 20
   }
 }
 ```
 
-### A.2 分组聚合
-```json
-{
-  "Moment[]": {
-    "@column": "sex;count(id):total,avg(age):avgAge",
-    "@group": "sex",
-    "@having": "count(id)>10"
-  }
-}
-```
+### JOIN 查询
 
-### A.3 复杂条件
-```json
-{
-  "User": {
-    "age{}": ">=18;<=65",
-    "name$": "a",
-    "status{}": [0,1,2],
-    "registerDate%": "2024-01-01,2024-12-31",
-    "@combine": "age{} & name$ & (status{} | registerDate%)"
-  }
-}
-```
-
-### A.4 关联查询
 ```json
 {
   "Moment": {
-    "id": 1,
-    "User@": {
-      "id@": "/Moment/userId"
+    "@column": "id,content"
+  },
+  "join": {
+    "</User/id@": {
+      "@column": "id,name,head",
+      "sex": 1
     },
-    "Comment[]@": {
-      "momentId@": "/Moment/id"
+    ">/Comment/momentId@": {
+      "@column": "id,content",
+      "@order": "date-",
+      "@combine": "content$"
     }
-  }
-}
-```
-
-### A.5 批量插入
-```json
-{
-  "Moment[]": {
-    "Moment": {
-      "content": "test",
-      "userId": 1
-    }
-  }
-}
-```
-
-### A.6 条件更新
-```json
-{
-  "Moment": {
-    "id": 1,
-    "content": "updated content",
-    "@combine": "id"
   }
 }
 ```
