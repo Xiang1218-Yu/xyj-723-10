@@ -25,21 +25,26 @@ apijson/orm/
 ├── AbstractFunctionParser.java # 远程函数解析、脚本引擎支持 (JSR223)
 ├── Logic.java                  # 逻辑运算类型 (|&!) TYPE_OR=0, TYPE_AND=1, TYPE_NOT=2
 ├── Join.java                   # 连表配置，12种 JOIN 类型符号
-├── Operation.java              # 操作枚举 (11种: MUST/REFUSE/TYPE/VERIFY/EXIST/UNIQUE/INSERT/UPDATE/REPLACE/REMOVE/IF/ALLOW_PARTIAL_UPDATE_FAIL/IS_ID_CONDITION_MUST)
+├── Operation.java              # 操作枚举 (13种: MUST/REFUSE/TYPE/VERIFY/EXIST/UNIQUE/INSERT/UPDATE/REPLACE/REMOVE/IF/ALLOW_PARTIAL_UPDATE_FAIL/IS_ID_CONDITION_MUST)
 ├── Subquery.java               # 子查询配置 (path/from/range/key/config)
 ├── SQLConfig.java              # 接口：36种数据库常量、getter/setter声明
 ├── script/                     # 脚本执行器 (JSR223/JavaScript)
 └── model/                      # 系统表模型 (Access/Request/Table/Column/Document/Function/Script)
 
 apijson/ (根包)
-├── JSONMap.java                # 34个 KEY_ 常量定义 + TABLE_KEY_LIST
+├── JSONMap.java                # KEY_ 常量定义（~40个），TABLE_KEY_LIST 共 34 个 @ 关键词白名单
 ├── JSON.java                   # JSON 工具类
 ├── SQL.java                    # SQL 关键字常量与函数工具 (count/sum/max/min/avg/concat/replace/...)
 ├── RequestMethod.java          # 8种方法枚举 (GET/HEAD/GETS/HEADS/POST/PUT/DELETE/CRUD)
 └── StringUtil.java             # 字符串工具
 ```
 
-> `[源码]` 模块结构来源于 [src/main/java/apijson/orm/](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Charmander/APIJSONORM/src/main/java/apijson/orm) 和 [src/main/java/apijson/](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723/xyj-723-10_Charmander/APIJSONORM/src/main/java/apijson) 目录实际文件列表。
+> `[源码]` 模块结构来源于 [src/main/java/apijson/orm/](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Charmander/APIJSONORM/src/main/java/apijson/orm) 和 [src/main/java/apijson/](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Charmander/APIJSONORM/src/main/java/apijson) 目录实际文件列表。
+
+> **关于关键词数量的区分**`[源码]`：
+> - **TABLE_KEY_LIST（[JSONMap.java#L207-L242](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Charmander/APIJSONORM/src/main/java/apijson/JSONMap.java#L207)）共 34 个** — 这是所有被识别为"表级配置关键词"的 `@` 前缀 key 白名单，由 `AbstractObjectParser` 传入 `newSQLConfig` 前过滤使用。34 个中：25 个在 `newSQLConfig` 内被提取处理，9 个由 Parser/ObjectParser 层消费（`@string`/`@trim`/`@get`/`@gets`/`@head`/`@heads`/`@post`/`@put`/`@delete`）。
+> - **newSQLConfig 内提取的关键词共 25 个** — 分为两批：阶段[1]-[2]提前提取 6 个（`@explain`/`@database`/`@datasource`/`@namespace`/`@catalog`/`@schema`，[L5484-L5498](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Charmander/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L5484)）；阶段[8] try 块内批量提取 19 个（`@role`/`@cache`/`@from`/`@column`/`@null`/`@cast`/`@combine`/`@group`/`@having`/`@having&`/`@sample`/`@latest`/`@partition`/`@fill`/`@order`/`@key`/`@raw`/`@json`/`@method`，[L5639-L5657](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Charmander/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L5639)）。
+> - **不在 TABLE_KEY_LIST 中的 4 个关键词**：`@try`/`@catch`/`@drop`/`@default`（[JSONMap.java#L166-L170](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Charmander/APIJSONORM/src/main/java/apijson/JSONMap.java#L166)），完全由 Parser 层处理，不进入 `newSQLConfig`。
 
 ### 1.2 核心能力矩阵
 
@@ -115,9 +120,9 @@ public static <T, M extends Map<String, Object>, L extends List<Object>> SQLConf
   │     @role, @cache, @from, @column, @null, @cast, @combine,
   │     @group, @having, @having&, @sample, @latest, @partition,
   │     @fill, @order, @key, @raw, @json, @method
-  │     共20个关键词（注意：不包含 @try/@catch/@drop/@default/@datasource/@namespace/@catalog/@schema，后者在[2]已处理）
+  │     共19个关键词（此为 try 块内批量提取的数量；加上阶段[1]-[2]提前提取的 6 个，newSQLConfig 共处理 25 个关键词）
   │
-  ├─[9] try 块内：remove 所有 id/userId + 20个关键词 (L5661-L5690)
+  ├─[9] try 块内：remove 所有 id/userId + 25个关键词 (L5661-L5690)
   │
   ├─[10] @null 处理 (L5693-L5708)
   │      逗号分隔 "key0,key1..." → request.put(nk, null)
@@ -189,7 +194,7 @@ public static <T, M extends Map<String, Object>, L extends List<Object>> SQLConf
   │
   └─[19] finally 块：还原 request (L6200-L6285)
         所有已 remove 的 key 按是否非 null 决定是否 put 回
-        （id/userId/条件/20个关键词）
+        （id/userId/条件/25个关键词，注意 namespace/catalog 未在 finally 中还原）
 ```
 
 ### 2.3 WHERE vs CONTENT 分流规则 `[源码]`
