@@ -76,7 +76,7 @@ HTTP →  │ Parser(AbstractParser.parseResponse)         │  JSON → 请求�
 | DELETE | DELETE | 删除（或软删除） | 是 |
 | CRUD | POST /crud | 单请求多语句 | 混合 |
 
-判定方法：[isQueryMethod](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Squirtle/APIJSONORM/src/main/java/apijson/RequestMethod.java#L83-L85)（读）、[isUpdateMethod](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Squirtle/APIJSONORM/src/main/java/apijson/RequestMethod.java#L91-L93)（写）、[isPublicMethod](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Squirtle/APIJSONORM/src/main/java/apijson/RequestMethod.java#L99-L101)（明文）。**写操作必须带 WHERE 条件**，否则 [getWhereString](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Squirtle/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L3344-L3346) 抛 `UnsupportedOperationException("写操作请求必须带条件！！！")`。
+判定方法：[isQueryMethod](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Squirtle/APIJSONORM/src/main/java/apijson/RequestMethod.java#L83-L85)（读）、[isUpdateMethod](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Squirtle/APIJSONORM/src/main/java/apijson/RequestMethod.java#L91-L93)（写）、[isPublicMethod](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Squirtle/APIJSONORM/src/main/java/apijson/RequestMethod.java#L99-L101)（明文）。**写操作必须带 WHERE 条件**，该检查发生在 [getWhereString](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Squirtle/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L3337-L3346)（由 [gainSQL](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Squirtle/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L4932) 拼装 UPDATE/DELETE 时调用），条件为空且 `isQueryMethod(method)==false` 时抛 `UnsupportedOperationException("写操作请求必须带条件！！！")`（[L3344-L3346](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Squirtle/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L3344-L3346)）。POST 单条 INSERT 在 [Step 7](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Squirtle/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L5740-L5798) 已提前 `return`，INSERT 语句本身也无 WHERE 子句，故不受该校验约束；CRUD 内的子写语句会按各自方法独立校验。
 
 ### 2.2 入口方法
 
@@ -100,8 +100,10 @@ HTTP →  │ Parser(AbstractParser.parseResponse)         │  JSON → 请求�
 [parseJoin](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Squirtle/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L6300) 对每个 `Join` 递归调用 `newSQLConfig`，生成副表 config、ON config、OUTER config，并在 HEAD/HEADS 时强制改为 SELECT 关联键以优化性能。
 
 ### Step 4：主键与 userId 强制 AND 条件
-- `id`/`id{}`/`userId`/`userId{}` 先被过滤：Number 必须 `>0`，String 不能空；Collection 形式去无效值、去重。
-- `id` 与 `id{}` 同时出现时，`id` 必须 ∈ `id{}` 集合（[L5568-L5580](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Squirtle/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L5568-L5580)）。
+- `id`/`id{}`/`userId`/`userId{}` 先被过滤：Number 必须 `>0`，String 不能空；Collection 形式去无效值、去重（无效值会抛 [NotExistException](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Squirtle/APIJSONORM/src/main/java/apijson/orm/exception/NotExistException.java)；非 `Long/String/Subquery` 类型抛 `IllegalArgumentException`）。
+- **同时出现校验**：当 `id` 与 `id{}` 同时传入时，`id` 必须能在 `id{}` 集合中 `toString().equals(...)` 匹配到，否则抛 `NotExistException`（[L5568-L5580](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Squirtle/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L5568-L5580)）；`userId` 与 `userId{}` 同理（[L5622-L5634](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Squirtle/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L5622-L5634)）。此处用字符串比较是为了兼容 id 为 Long 而集合元素为 Integer 的场景。
+- `id`/`userId` 在 DELETE/PUT 时会强制 `config.setCount(1)`（[L5582-L5584](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Squirtle/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L5582-L5584)），避免批量误删/误改。
+- 当 `userIdKey.equals(idKey)`（主键即用户键，如 ownerId）时不再重复处理 userId（[L5605](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Squirtle/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L5605)）。
 - POST 且未显式传 id 时，由 [Callback.newId](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Squirtle/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L6608)（默认时间戳递增）生成。
 
 ### Step 5：抽取 @ 关键字
@@ -115,19 +117,27 @@ HTTP →  │ Parser(AbstractParser.parseResponse)         │  JSON → 请求�
 所有剩余 key 必须是合法标识符 [StringUtil.isName](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Squirtle/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L5760)，拼装 `columns` 与 `values`（id、userId 追加到最前），调用 `config.setValues(valuess)` 走批量 INSERT。
 
 ### Step 8：非 POST 分支，构建 WHERE 与 CONTENT
-核心在 [L5800-L5985](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723/xyj-723-10/xyj-723-10_Squirtle/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L5800-L5985)：
+核心在 [L5799-L5985](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Squirtle/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L5799-L5985)。注意：POST 分支已在 [Step 7](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Squirtle/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L5740-L5798) 处理并 `return`，进入本步的 method 只能是 GET/HEAD/GETS/HEADS/PUT/DELETE。
 
-1. `isWhere = method != PUT`：除 PUT 外其余方法的剩余键全部当条件。
-2. 先把 id/userId 加入 `tableWhere` 与 `andList`（强制 AND 前置，利用索引）。
-3. **软删除**：若 `enableFakeDelete`，对非 DELETE 自动追加 `deletedKey != deletedValue` / `deletedKey = notDeletedValue`。
-4. 解析 `@combine`：
-   - 若 `combine` 被切分后只剩一段（含 `&`/`|`/`!`/`(` 等运算符），进入布尔表达式模式；
-   - 否则按逗号列表式，`&key`/`|key`/`!key`/`key`（默认 OR）入 andList/orList/notList。
-5. 遍历剩余 key：
-   - 非 PUT 的键全部作为 WHERE；
-   - PUT 时若键名被 `@combine` 表达式引用（[isKeyInCombineExpr](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Squirtle/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L6639)）也作为 WHERE；
-   - 其余进入 `tableContent`（SET 内容）。
-6. 键后缀（`>`, `<`, `~`, `{}`, `<>` 等）由 [gainWhereItem](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Squirtle/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L3897) 分派（见 §5）。
+1. **`isWhere` 判定**（[L5800](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Squirtle/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L5800)）：`final boolean isWhere = method != PUT;`
+   - 对 GET/HEAD/GETS/HEADS/DELETE：`isWhere=true`，剩余键**全部**作为 WHERE 条件；
+   - 对 PUT：`isWhere=false`，剩余键需要进一步在 WHERE 与 SET（`tableContent`）之间分流（见第 5 条）。
+   - 源码注释"除了POST,PUT，其它全是条件"里的 POST 因 Step 7 已提前 return，不会进入本步。
+2. **强制 AND 前置**（[L5814-L5833](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Squirtle/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L5814-L5833)）：把 Step 4 已验证的 `id`/`id{}`/`userId`/`userId{}` 重新放入 `tableWhere` 并追加到 `andList`/`whereList`，保证它们排在 WHERE 最前面以命中索引且不受 `@combine` 默认 OR 影响。
+3. **软删除自动条件**（[L5835-L5857](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Squirtle/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L5835-L5857)）：`enableFakeDelete` 且非 DELETE 时自动追加 `deletedKey != deletedValue` 或 `deletedKey = notDeletedValue`。
+4. **解析 `@combine`**（[L5803-L5804](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Squirtle/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L5803-L5804)、[L5869-L5943](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Squirtle/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L5869-L5943)）：
+   - `StringUtil.split(combine)` 后若只剩一段且含 `&`/`|`/`!`/`(`/`)`，进入布尔表达式模式，`combineExpr` 为表达式原文；
+   - 否则按逗号列表式，`&key`/`|key`/`!key`/`key`（默认 OR）分别入 `andList`/`orList`/`notList`，收集到 `whereList`；PUT 禁止 `|key`/`!key`。
+5. **遍历剩余键**（[L5950-L5974](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Squirtle/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L5950-L5974)），PUT 分流逻辑（`isWhere=false` 时）按以下顺序判定：
+   1. 若 `key<>:{}` 以外的 value 是 `Map`，直接抛 `IllegalArgumentException`（不允许嵌套对象）；
+   2. **进入 `tableWhere`** 的条件（三选一）：
+      - `isWhere == true`（非 PUT）；或
+      - `StringUtil.isName(key.replaceFirst("[+-]$", "")) == false`——键名不是合法字段名（说明带了 `{}`/`<>`/`>`/`<`/`~`/`$`/`%`/`!` 等条件后缀；尾随的 `+`/`-` 为 `@order` 排序后缀，会被先剥掉）；或
+      - 存在 `combineExpr` 且 [isKeyInCombineExpr](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Squirtle/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L6639) 判定键名被布尔表达式引用。
+   3. 否则若 `whereList.contains(key)`（在逗号列表式 `@combine` 中声明）→ 也进 `tableWhere`；
+   4. 剩余键归入 `tableContent`，作为 PUT 的 `SET` 内容。
+   - 对进入 `tableWhere` 且不在 `whereList` 中的键，会自动追加到 `andList`（保证它们以 AND 连接）。
+6. **键后缀分派**：每个进入 `tableWhere` 的键，后续在 [getWhereString](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Squirtle/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L3337) 调 [parseCombineExpression](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Squirtle/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L3364) → [gainWhereItem](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Squirtle/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L3897) 按后缀分派到 `gainEqualString/gainCompareString/gainContainString/gainBetweenString/gainRangeString/gainExistsString/gainRegExpString/gainSearchString`（见 §5）。
 
 ### Step 9：DELETE 软删除改 PUT
 [L5987-L6008](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Squirtle/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L5987-L6008)：当 `AbstractVerifier.ACCESS_FAKE_DELETE_MAP` 对该表有配置，DELETE 被改写成 `PUT SET deletedKey=deletedValue`，并回调 `config.onFakeDelete(map)` 追加字段（如 deletedTime）。
@@ -255,7 +265,10 @@ HTTP →  │ Parser(AbstractParser.parseResponse)         │  JSON → 请求�
 ### 6.2 求值语义
 
 - 对表达式中的每个键名，先按 `:` 切出 `column:inlineExpr`（允许内联 raw 片段，见 [L3442-L3454](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Squirtle/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L3442-L3454)）；否则从 `conditionMap` 取 value 走 `gainWhereItem`（WHERE）或 `gainHavingItem`（HAVING）生成条件片段 `wi`。
-- 每个片段被包装成 `( wi )`，若前置 `!` 则为 [gainCondition(true, wi)](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Squirtle/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L4800) → `NOT(wi)`。
+- 每个片段由 [gainCondition](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Squirtle/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L4791-L4803) 包装：
+  - `gainCondition(boolean not, String condition)`（[L4791-L4793](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Squirtle/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L4791-L4793)）直接委托三参版本且 `addOuterBracket=false`；
+  - `gainCondition(boolean not, String condition, boolean addOuterBracket)`（[L4800-L4803](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Squirtle/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L4800-L4803)）：`not=true` → `NOT(condition)`，`not=false` → 原样返回 `condition`；`addOuterBracket=true` 时再外包一层 `( ... )`。
+  - 在 [parseCombineExpression L3480](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Squirtle/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L3480) 中调用的是二参版本：`"( " + gainCondition(isNot, wi) + " )"`——外层括号由调用方手动拼接，因此片段在 `isNot=false` 时实际为 `( wi )`，`isNot=true` 时为 `( NOT(wi) )`（注意 `NOT` 与内层括号之间没有空格）。
 - 运算符按出现位置串接为 `AND`/`OR`/`NOT`。
 - **未在表达式中出现的条件**会以 AND 追加到尾部（WHERE 模式）或在 HAVING 中作为前缀；这样保证 `id/userId` 强制条件一定生效（[L3608-L3644](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Squirtle/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L3608-L3644)）。
 
@@ -438,7 +451,7 @@ HTTP →  │ Parser(AbstractParser.parseResponse)         │  JSON → 请求�
 
 | 场景 | 异常 | 排查 |
 |------|------|------|
-| 写操作无条件 | `UnsupportedOperationException("写操作请求必须带条件！！！")` | PUT/DELETE/POST(array) 必须带 id/userId/其它条件 |
+| 写操作无条件 | `UnsupportedOperationException("写操作请求必须带条件！！！")` | PUT/DELETE/CRUD 子写语句必须带 id/userId/其它条件；POST 单条 INSERT 不触发该校验（INSERT 无 WHERE） |
 | `@combine` 空格不合法 | `IllegalArgumentException(... 不允许首尾/连续空格 ...)` | `&`/`\|` 两侧各一空格；`!` 紧贴键名；括号内外无空格 |
 | `@combine` 引用 id | `UnsupportedOperationException(... 不允许传 id, id{}, userId, userId{})` | id 强制 AND，不要写进表达式 |
 | `@database` 非法 | `UnsupportedDataTypeException` | 取值须在 SQLConfig 常量列表内 |

@@ -33,7 +33,8 @@
    - 遍历 request 键值，按 [isWhere](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Squirtle/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L5800) 分入 `tableWhere`（条件）或 `tableContent`（PUT SET 内容）；
    - 条件键后缀（`$`/`~`/`%`/`{}`/`}{`/`<>`/`>=`/`<=`/`>`/`<`/`!`）由 [gainWhereItem](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Squirtle/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L3897) 分派到 `gainSearchString/gainRegExpString/gainBetweenString/gainRangeString/gainExistsString/gainContainString/gainCompareString/gainEqualString`。
 9. **软删除**：DELETE 命中 ACCESS 假删除配置时，自动改写成 PUT SET deleted=1，并叠加 `deletedTime`。
-10. **@column/@having/@group/@order/@limit**：`@column` 支持 `DISTINCT` 前缀与 `fun(key)` 函数片段；`@having` 默认 OR、`@having&` AND；写操作必须带条件（否则抛 `UnsupportedOperationException`）。
+10. **@column/@having/@group/@order/@limit**：`@column` 支持 `DISTINCT` 前缀与 `fun(key)` 函数片段；`@having` 默认 OR、`@having&` AND；最后把所有 `@` 关键字 put 回 request 供下游对象复用。
+    > 注："写操作必须带条件"的硬校验**不在** `newSQLConfig` 内，而是在 [gainSQL](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Squirtle/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L4932) 拼装 SQL 时调用 [getWhereString](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Squirtle/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L3337-L3346)（[L3344-L3346](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Squirtle/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L3344-L3346)）对非查询方法（PUT/DELETE/CRUD 子语句）触发 `UnsupportedOperationException("写操作请求必须带条件！！！")`；POST 单条 INSERT 因在 Step 7 提前 `return` 且 INSERT 无 WHERE 子句，不经过此校验。
 
 ### 1.3 @combine 条件表达式引擎
 
@@ -73,30 +74,32 @@
 
 ## 3. 版本路线图
 
-> 版本号遵循 SemVer。当前 [pom.xml](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Squirtle/APIJSONORM/pom.xml#L8) 为 `8.2.0`。
+> 版本号遵循 SemVer。当前 [pom.xml](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Squirtle/APIJSONORM/pom.xml#L8) 为 `8.2.0`（基线日 2026-07-24）。下列日期为目标季度/月份，按"季度发布、补丁滚动"节奏推进。
 
-### 3.1 v8.2.x（维护期，1-2 个月）
+### 3.1 v8.2.x（当前维护分支，持续滚动）
+
+定位：`8.2.0` 之后的补丁/小改线，不做破坏性变更，按 `8.2.1`/`8.2.2`…滚动发布，无固定截止日期。首个补丁计划在基线日后 2–4 周内。
 
 - [ ] 将 `newSQLConfig` 中 `id/userId` 处理抽为 `IdentityPolicy` 策略接口，默认保留 [SimpleCallback.newId](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Squirtle/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L6608)，允许注入雪花/UUID/数据库自增。
 - [ ] `@combine` 表达式解析增加单测与错误码枚举（替代散落的 `IllegalArgumentException` 文本）。
 - [ ] 修复 prepared value 在 `JOIN ON + @combine` 场景的顺序耦合点（见 [setPreparedValueList(new ArrayList<>())](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Squirtle/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L3398)）。
 - [ ] 静态常量（MAX_COMBINE_*、IGNORE_*）改为可通过 `apijson.properties` 外部化配置。
 
-### 3.2 v8.3（2026 Q3）— 可观测性 & 测试
+### 3.2 v8.3（2026 Q4）— 可观测性 & 测试
 
 - [ ] 引入 `apijson-micrometer`：`parser.parse`/`sql.execute`/`combine.parse` 埋点 Timer + Counter。
 - [ ] 在 ORM 包内新增 `src/test`：针对 `newSQLConfig` 与 `parseCombineExpression` 的参数化测试（JUnit5），覆盖全部条件后缀与安全闸。
 - [ ] `@explain` 返回结构化 JSON（SQL、prepared values、join 树、combine AST），DEBUG 与非 DEBUG 可控字段。
 - [ ] 发布官方 Spring Boot 3 Starter（`apijson-spring-boot-starter`），自动装配 `Parser/Verifier/SQLExecutor`。
 
-### 3.3 v8.4（2026 Q4）— SQL 能力增强
+### 3.3 v8.4（2027 Q1）— SQL 能力增强
 
 - [ ] 默认开启 `ENABLE_WITH_AS`（MySQL 8+/PG 12+/Oracle 等），子查询优先 CTE。
 - [ ] 新增 `@window` 关键字：`"@window":"row_number() over(partition by userId order by date desc)"`，`@column` 可引用别名。
 - [ ] `@combine` 支持集合谓词：`"tags{} &| any(...)"` 桥接 JSON 字段；为 JSON 类型字段统一 `json_contains` 方言。
 - [ ] 完成 Milvus/InfluxDB/TDengine/IoTDB/QuestDB 等时序与向量库的 `AbstractSQLConfig` 实现并加 TCK。
 
-### 3.4 v9.0（2027 H1）— 架构升级
+### 3.4 v9.0（2027 Q2–Q3）— 架构升级
 
 - [ ] **模块化**（JPMS）拆分：`apijson-core`（无 JSON 实现）、`apijson-fastjson2`、`apijson-jackson`，解耦 [JSONCreator](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Squirtle/APIJSONORM/src/main/java/apijson/JSONCreator.java)。
 - [ ] **编译期安全**：提供 OpenAPI/JSON Schema 导出，前端可按角色拉取可用结构。
@@ -104,7 +107,7 @@
 - [ ] **多租户/行级安全**：在 `newSQLConfig` 注入租户策略 SPI，自动追加 `tenantId` AND 条件，绕过 [ALLOW_MISSING_KEY_4_COMBINE](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Squirtle/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L67) 带来的风险。
 - [ ] 默认值加固：`ALLOW_MISSING_KEY_4_COMBINE` 改默认 `false`；写操作必须显式带条件，否则抛错而非可配置。
 
-### 3.5 v9.x+（展望）
+### 3.5 v9.x+（2027 Q4 及以后展望）
 
 - GraalVM native-image 支持（AOT 反射配置生成）。
 - 自然语言 → APIJSON 的 AI 适配层（复用 `@combine` AST）。
@@ -117,11 +120,11 @@
 
 | 里程碑 | 目标日期 | 验收标准 |
 |--------|----------|----------|
-| M1 v8.2.x 维护 | 2026-09 | IdentityPolicy 合入；`@combine` 单测覆盖率 ≥ 85% |
-| M2 v8.3 可观测 | 2026-10 | Starter 可直接 `mvn spring-boot:run`；Micrometer 指标 ≥ 15 项 |
-| M3 v8.4 SQL 增强 | 2026-12 | TCK 在 MySQL/PG/Oracle/ClickHouse/Doris/StarRocks 全绿 |
-| M4 v9.0 模块化 | 2027-03 | Java 17 baseline、JPMS 模块图通过 `jdeps` 检查、迁移指南发布 |
-| M5 v9.x 联邦/AOT | 2027-06 | native-image Helloworld 镜像 < 80MB；跨数据源 JOIN Demo |
+| M1 v8.2.x 首个补丁 | 2026-08（滚动维护至 v8.3 发布） | IdentityPolicy 合入；`@combine` 单测覆盖率 ≥ 85%；prepared value 顺序修复合入 |
+| M2 v8.3 可观测 | 2026-12 | Starter 可直接 `mvn spring-boot:run`；Micrometer 指标 ≥ 15 项 |
+| M3 v8.4 SQL 增强 | 2027-03 | TCK 在 MySQL/PG/Oracle/ClickHouse/Doris/StarRocks 全绿 |
+| M4 v9.0 模块化 | 2027-09 | Java 17 baseline、JPMS 模块图通过 `jdeps` 检查、迁移指南发布 |
+| M5 v9.x 联邦/AOT | 2027-12 | native-image Helloworld 镜像 < 80MB；跨数据源 JOIN Demo |
 
 ---
 
