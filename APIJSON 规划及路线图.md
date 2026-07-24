@@ -24,7 +24,7 @@
 1. **前置校验**：`@explain` 仅 DEBUG 允许；`@database` 必须命中 [DATABASE_LIST](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Squirtle/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L98)。
 2. **实例化**：通过 [Callback.getSQLConfig](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Squirtle/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L6586) 按数据库类型返回具体 SQLConfig（MySQL/PG/Oracle/ClickHouse/Doris/MongoDB 等 40+ 种）。
 3. **JOIN 处理**：[parseJoin](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Squirtle/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L6300) 递归 `newSQLConfig` 生成副表与 ON/OUTER 子配置。
-4. **主键/用户 ID 强制 AND 条件**：`id`、`id{}`、`userId`、`userId{}` 先过滤无效值（≤0、空串），POST 时通过 [newId](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Squirtle/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L6608) 生成雪花/时间戳 ID。
+4. **主键/用户 ID 强制 AND 条件**：`id`、`id{}`、`userId`、`userId{}` 先过滤无效值（≤0、空串），POST 时通过 [newId](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Squirtle/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L6608) 生成时间戳递增 ID（默认实现为 `System.currentTimeMillis()`，同毫秒内自增避免冲突；非雪花算法）。
 5. **关键字抽取**：从 request 中 `remove` 掉 `@role/@cache/@from/@column/@null/@cast/@combine/@group/@having/@order/@key/@raw/@json/@method` 等 20+ 个 `@` 开头关键字，分别存入 config 字段。
 6. **`@null`/`@cast` 展开**：`@null:"tag"` → `request.put("tag", null)`（IS NULL）；`@cast:"date:DATE"` 登记类型转换。
 7. **POST 分支**：剩余键全部视为插入列，组装 `columns[]`/`values[]` 批量 INSERT。
@@ -43,7 +43,7 @@
 - **逗号列表式**（兼容旧版/PUT）：`"a,&b,|c,!d"` → `&/|/!` 前缀决定 `andList/orList/notList`，无前缀默认 OR。PUT 禁止 `|`/`!`。
 - **布尔表达式式**（5.0+）：`"a & (b | !c)"` —— 字符级状态机解析，语法严格：
   - `&`、`|` 两侧必须各一个空格；`!` 紧贴键名、不接空格；`(` 右侧与 `)` 左侧不允许空格；不允许首尾/连续空格。
-  - 每个键名从 `conditionMap` 取值后用 `gainWhereItem` 生成片段，再用 [gainCondition(isNot, wi)](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Squirtle/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L4800) 包成 `(NOT(wi))`，最终 AND/OR/NOT 串接。
+  - 每个键名从 `conditionMap` 取值后用 `gainWhereItem` 生成片段 `wi`，再调用二参重载 [gainCondition(isNot, wi)](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Squirtle/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L4791-L4793)（该重载内部委托三参版且 `addOuterBracket=false`）；`isNot=true` 时返回 `NOT(wi)`，否则原样返回 `wi`。外层的 `( ... )` 由 [parseCombineExpression L3480](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Squirtle/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L3480) 通过字符串拼接 `"( " + ... + " )"` 手动加上，最终 AND/OR/NOT 串接。
   - 未出现在表达式里的条件会以 AND 追加到尾部（保证 prepared value 顺序正确）。
   - **安全闸**：[MAX_COMBINE_DEPTH=2 / MAX_COMBINE_COUNT=5 / MAX_COMBINE_KEY_COUNT=2 / MAX_COMBINE_RATIO=1.0](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Squirtle/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L63-L67)，同引擎复用于 `@having`。
 
@@ -65,7 +65,7 @@
 围绕 **"零 CRUD 后端、安全可观测、多数据源一体化"** 三个方向：
 
 1. **协议稳定**：`@combine`/`@having` 语法语义与安全闸 SLA 化，破坏性改动走 major version。
-2. **能力完备**：补齐窗口函数、CTE(`WITH AS`，已有开关 [ENABLE_WITH_AS](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Squirtle/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L45))、JSON 字段函数、向量检索（Milvus 已声明但未落地）。
+2. **能力完备**：补齐窗口函数、CTE（开关 [ENABLE_WITH_AS](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Squirtle/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L45) 已存在，`isWithAsEnable()` 仅对 MySQL 做了版本号 ≥8 校验，对 PG/Oracle 等无版本门槛需各方言自行验证）、JSON 字段函数；时序/向量库（Milvus、InfluxDB、TDengine、IoTDB、QuestDB）在 [DATABASE_LIST](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Squirtle/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L163-L168) 已注册并在部分分支（如 LIMIT、标识符引用，见 [L1259-L1303](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Squirtle/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L1259-L1303)、[L3051-L3058](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Squirtle/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L3051-L3058)）有处理，需补齐完整方言实现与 TCK。
 3. **工程易用**：提供 Spring Boot Starter、可观测性（Micrometer/OpenTelemetry）、GraalVM native-image。
 4. **安全加固**：默认拒绝无键 `@combine`、写操作必带条件的审计、SQL 注入正则升级。
 5. **可观测/可测试**：`@explain` 输出执行计划，内置 JUnit5 测试套件与 TCK（Technology Compatibility Kit）。
@@ -94,14 +94,14 @@
 
 ### 3.3 v8.4（2027 Q1）— SQL 能力增强
 
-- [ ] 默认开启 `ENABLE_WITH_AS`（MySQL 8+/PG 12+/Oracle 等），子查询优先 CTE。
+- [ ] 默认开启 `ENABLE_WITH_AS`：当前 [isWithAsEnable()](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Squirtle/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L5054-L5057) 对非 MySQL 数据库无版本门槛（开启即返回 true），需先为 PG/Oracle 等补 CTE 兼容性校验，再切换默认值。
 - [ ] 新增 `@window` 关键字：`"@window":"row_number() over(partition by userId order by date desc)"`，`@column` 可引用别名。
 - [ ] `@combine` 支持集合谓词：`"tags{} &| any(...)"` 桥接 JSON 字段；为 JSON 类型字段统一 `json_contains` 方言。
 - [ ] 完成 Milvus/InfluxDB/TDengine/IoTDB/QuestDB 等时序与向量库的 `AbstractSQLConfig` 实现并加 TCK。
 
 ### 3.4 v9.0（2027 Q2–Q3）— 架构升级
 
-- [ ] **模块化**（JPMS）拆分：`apijson-core`（无 JSON 实现）、`apijson-fastjson2`、`apijson-jackson`，解耦 [JSONCreator](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Squirtle/APIJSONORM/src/main/java/apijson/JSONCreator.java)。
+- [ ] **模块化**（JPMS）拆分：把当前自研的 [JSONMap](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Squirtle/APIJSONORM/src/main/java/apijson/JSONMap.java)/[JSONList](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723/xyj-723-10_Squirtle/APIJSONORM/src/main/java/apijson/JSONList.java)（无外部 JSON 依赖，[pom.xml](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Squirtle/APIJSONORM/pom.xml#L23-L24) `<dependencies/>` 为空）抽到 `apijson-core`，并预留 `JSONProvider` SPI 以便后续可替换为 fastjson2/jackson 等实现，解耦 [JSONCreator](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Squirtle/APIJSONORM/src/main/java/apijson/JSONCreator.java)。
 - [ ] **编译期安全**：提供 OpenAPI/JSON Schema 导出，前端可按角色拉取可用结构。
 - [ ] **Reactive 执行器**：新增 `AbstractSQLExecutor` 的 R2DBC 实现，Parser 链路保持同步兼容。
 - [ ] **多租户/行级安全**：在 `newSQLConfig` 注入租户策略 SPI，自动追加 `tenantId` AND 条件，绕过 [ALLOW_MISSING_KEY_4_COMBINE](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Squirtle/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L67) 带来的风险。
@@ -136,7 +136,7 @@
 | 40+ 数据库方言维护成本 | 版本碎片化 | TCK 作为合入门禁，社区 PR 必须带对应数据库 Testcontainer 用例 |
 | 默认放行 `ALLOW_MISSING_KEY_4_COMBINE` | 安全漏洞 | v9.0 改默认值；提供 `@audit` 模式日志告警 |
 | Java 8 baseline 限制 API 演进 | 无法用 Records/sealed | v9.0 升 Java 17，保留 8.x 维护分支至 2027 年底 |
-| 无 JSON 实现解耦 | fastjson 1.x CVE 风险 | v9.0 拆 core/fastjson2/jackson，默认 fastjson2 |
+| 自研 JSON 容器无 SPI | [JSONMap](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Squirtle/APIJSONORM/src/main/java/apijson/JSONMap.java)/[JSONList](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Squirtle/APIJSONORM/src/main/java/apijson/JSONList.java) 基于 LinkedHashMap/ArrayList 手写（见类注释 "replace com.alibaba.fastjson"），[pom.xml](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Squirtle/APIJSONORM/pom.xml#L23-L24) 无外部 JSON 依赖，无法插拔第三方 JSON 库，序列化特性需要自己维护 | v9.0 抽 `JSONProvider` SPI，保留当前实现为默认，允许接入 fastjson2/jackson 等 |
 
 ---
 

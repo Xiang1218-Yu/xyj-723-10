@@ -144,7 +144,9 @@ HTTP →  │ Parser(AbstractParser.parseResponse)         │  JSON → 请求�
 
 ### Step 10：列选择、聚合、分页与还原
 - `@column` 解析：`DISTINCT ` 前缀 → `PREFIX_DISTINCT`；`fun(key)` 片段原样保留；普通字段按 `,`/`;` 切分；`@raw` 标记的片段走原始 SQL。
-- `@having`/`@having&`：与 `@combine` 同引擎，但 `isHaving=true`；默认 OR、可用 `@having&` 强制 AND（[L6058-L6070](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Squirtle/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L6058-L6070)，开关 [IS_HAVING_DEFAULT_AND](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Squirtle/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L35)）。
+- `@having`/`@having&`：与 `@combine` 同引擎，但 `isHaving=true`，只接受 SQL 函数片段（见 [L6076-L6108](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Squirtle/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L6076-L6108)）。多个 having 条件的连接符按以下优先级决定（[L6060-L6073](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Squirtle/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L6060-L6073)、[L6102-L6104](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Squirtle/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L6102-L6104)）：
+  - 传 `@having&` → `isHavingAnd=true`，强制用 `&`（AND）连接；
+  - 传 `@having` → 由静态开关 [IS_HAVING_DEFAULT_AND](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Squirtle/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L35) 决定：`false`（默认值）用 `|`（OR）连接，`true` 用 `&`（AND）连接。两关键字不可同时传（[L6063-L6067](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Squirtle/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L6063-L6067)）。
 - 最后把所有 `@` 关键字 `put` 回 request，保证后续对象解析还能读到（[L6246-L6284](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Squirtle/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L6246-L6284)）。
 
 最终 SQL 在 [gainSQL(boolean prepared)](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Squirtle/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L4932) 中按方法拼出 SELECT/INSERT/UPDATE/DELETE，调用 [gainConditionString](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Squirtle/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L5081) 完成 WHERE/HAVING/GROUP/ORDER/LIMIT 的组装。
@@ -437,8 +439,8 @@ HTTP →  │ Parser(AbstractParser.parseResponse)         │  JSON → 请求�
 | `MAX_COMBINE_KEY_COUNT` | 2 | 单 key 引用次数 |
 | `MAX_COMBINE_RATIO` | 1.0 | 表达式/总条件比值 |
 | `ALLOW_MISSING_KEY_4_COMBINE` | true | combine 缺键放行 |
-| `IS_HAVING_DEFAULT_AND` | false | 5.0 兼容开关：`@having` 默认 AND/OR |
-| `IS_HAVING_ALLOW_NOT_FUNCTION` | false | 5.0 兼容开关：HAVING 允许非函数表达式 |
+| `IS_HAVING_DEFAULT_AND` | false（默认） | 控制 `@having`（非 `@having&`）多条件的连接符：`false`→`\|`(OR)，`true`→`&`(AND)；`@having&` 传参时本开关不生效 |
+| `IS_HAVING_ALLOW_NOT_FUNCTION` | false（默认） | `false` 时 `@having` 的每个片段必须包含 `(` 和 `)`（即 SQL 函数），否则抛 `IllegalArgumentException` |
 | `ENABLE_WITH_AS` | false | 开启 WITH AS |
 | `IGNORE_EMPTY_STRING_METHOD_LIST` | null | 对哪些方法忽略空串 |
 | `IGNORE_BLANK_STRING_METHOD_LIST` | null | 对哪些方法忽略空白串 |

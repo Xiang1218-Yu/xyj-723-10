@@ -116,7 +116,7 @@ ObjectParser                       ── 每个表对象一个实例
 
 引擎特性：
 
-- 每个键从 `conditionMap` 取值生成条件片段 `wi`，用 [gainCondition](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Squirtle/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L4800) 包装为 `( wi )` 或 `NOT(wi)`；
+- 每个键从 `conditionMap` 取值生成条件片段 `wi`，再由二参重载 [gainCondition(isNot, wi)](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Squirtle/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L4791-L4793) 处理：`isNot=true` 时返回 `NOT(wi)`，`false` 时原样返回 `wi`；外层 `( ... )` 由解析器在 [L3480](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Squirtle/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L3480) 手动拼接；
 - **未出现在表达式里的条件自动 AND 追加到尾部**，保证 id/userId 等强制条件一定生效；
 - 同时驱动 `@having`/`@having&`；
 - **安全闸**：[MAX_COMBINE_DEPTH=2、MAX_COMBINE_COUNT=5、MAX_COMBINE_KEY_COUNT=2、MAX_COMBINE_RATIO=1.0](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Squirtle/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L61-L67)；
