@@ -136,7 +136,11 @@ public String gainWhereString(boolean hasPrefix) throws Exception {
 - **新版表达式**：`"a | (b & c & !(d | !e))"`，完整布尔表达式，交给 `parseCombineExpression`。
 - **旧版列表**：`"key0,&key1,|key2,!key3"`，逗号分隔、每项前缀 `&`/`|`/`!`，聚成 `combineMap`（`{"&":[...],"|":[...],"!":[...]}`）。保留是因为它能保证 JOIN 多 ON 子句的顺序且更快。
 
-判定：在 `newSQLConfig` 中 `StringUtil.split(combine)`，**恰好一个 token** → 新版表达式，否则走旧版列表分支。未在表达式中出现的 `where` 键会被隐式 AND。
+判定：在 `newSQLConfig` 中先 `String[] ws = StringUtil.split(combine)`，再取 `combineExpr = (ws == null || ws.length != 1) ? null : ws[0]`。随后（[AbstractSQLConfig.java:5883](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Bulbasaur/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L5883)）：
+- **`combineExpr` 非空**（`StringUtil.isNotEmpty(combineExpr, true)`）→ 走**新版表达式**路径（校验 id/userId 等禁用键后交给 `parseCombineExpression`）。
+- **`combineExpr` 为空且 `ws != null`** → 走**旧版逗号列表**路径，逐项去除 `&`/`|`/`!` 前缀聚成 `combineMap`。
+
+未在表达式中出现的 `where` 键会被隐式 AND。
 
 ### 4.2 Logic 模型
 [Logic.java](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Bulbasaur/APIJSONORM/src/main/java/apijson/orm/Logic.java)：`TYPE_OR=0` `TYPE_AND=1` `TYPE_NOT=2`，字符 `| & !`。`Logic(String key)` 检查键末字符决定类型，默认 OR。
@@ -159,6 +163,10 @@ public static float MAX_COMBINE_RATIO = 1.0f; // 键数 / conditionMap 大小
 - **`!`**：`!(` → 组取反（`NOT`）；紧贴键 → 词项取反（`isNot=true`）；否则是键的一部分。禁止 `!` 后跟空格/`)`/`&`/`!`。
 - **`(`**：校验前有连接符，`depth++` 且 ≤ `MAX_COMBINE_DEPTH`。
 - **`)`**：`depth--`，为负则报括号不匹配。
+
+**`preparedValueList` 重置**：当 `isHaving == false` 时，方法在开始扫描前调用 `setPreparedValueList(new ArrayList<>())` 重置预编译值列表（[AbstractSQLConfig.java:3397-3399](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Bulbasaur/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L3397)），只收集本次表达式条件值——否则 JOIN ON 内部 `@combine` 拼接后占位符顺序会错乱。HAVING（`isHaving == true`）不重置，沿用已有列表以接在 WHERE 值之后。
+
+**`key:placeholder` 引用形式**：flush 时会用 `column.indexOf(":")` 拆分 `key`（[AbstractSQLConfig.java:3442-3454](file:///Users/tog/Desktop/code/gsb/gsb-723/xyj-723-10/xyj-723-10_Bulbasaur/APIJSONORM/src/main/java/apijson/orm/AbstractSQLConfig.java#L3442)）。当 `column` 不在 `conditionMap` 中时（兼容 `@null`），以冒号后的 `placeholder` 作为条件片段（`wi = key.substring(keyIndex + 1)`），且强制 `isNot = false`、`size++` 计入数量；若占位为空则报错。
 
 **预编译值顺序**：由于 `?` 占位符须按 SQL 顺序填充，方法分别收集表达式内条件值与「未在表达式中出现」的 AND 条件值，WHERE 时 `andCond AND ( result )`，HAVING 时相反，保证 `preparedValueList` 顺序正确。
 
